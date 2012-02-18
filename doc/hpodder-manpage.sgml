@@ -820,6 +820,13 @@ podcastfaildays = 5
               do the new user intro more than once.
             </para></listitem>
         </varlistentry>
+         <varlistentry><term>usenotify</term>
+          <listitem><para>Set it to <option>yes</option> to use libnotify.
+              You obviously will need to install libnotify on your system.
+              Furthermore, this option is not autoset and written to config
+              on the first run of &hpodder. 
+            </para></listitem>
+        </varlistentry>
       </variablelist>
     </refsect2>              
 

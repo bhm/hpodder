@@ -62,6 +62,7 @@ getDefaultCP =
        return $ forceEither $ 
               do cp <- add_section startingcp "general"
                  cp <- set cp "general" "showintro" "yes"
+                 cp <- set cp "general" "usenotify" "no"
                  cp <- set cp "DEFAULT" "downloaddir" downloaddir
                  cp <- set cp "DEFAULT" "namingpatt" 
                        "%(safecasttitle)s/%(safefilename)s"
@@ -74,7 +75,7 @@ getDefaultCP =
                  cp <- set cp "DEFAULT" "renametypes" "audio/mpeg:.mp3,audio/mp3:.mp3,x-audio/mp3:.mp3"
                  cp <- set cp "DEFAULT" "postproctypes" "audio/mpeg,audio/mp3,x-audio/mp3"
                  cp <- set cp "DEFAULT" "gettypecommand" "file -b -i \"${EPFILENAME}\""
-                 cp <- set cp "DEFAULT" "postproccommand" "mid3v2 -T \"${EPID}\" -A \"${CASTTITLE}\" -t \"${EPTITLE}\" --WOAF \"${EPURL}\" --WOAS \"${FEEDURL}\" \"${EPFILENAME}\""
+                 cp <- set cp "DEFAULT" "postproccommand" "mid3v2 -T \"${EPID}\" -A \"${CASTTITLE}\" -t \"${EPTITLE}\" --WOAF \"${EPURL}\" --WOAS \"${FEEDURL}\" \"${EPFILENAME}\""                                
                  return cp
 
 startingcp = emptyCP {accessfunc = interpolatingAccess 10}
@@ -102,6 +103,11 @@ getMaxThreads :: IO Int
 getMaxThreads =
     do cp <- loadCP
        return $ read . forceEither $ get cp "general" "maxthreads"
+
+getUseNotify :: IO String
+getUseNotify = 
+    do cp <- loadCP
+       return $ forceEither $ get cp "general" "usenotify"
 
 getProgressInterval :: IO Int
 getProgressInterval =

@@ -51,6 +51,7 @@ import Control.Concurrent.MVar
 import Control.Concurrent
 import Data.Foldable(forM_)
 import Network.URI(unEscapeString)
+import System.Libnotify (oneShot, GeneralHint)
 import System.Posix.IO(
                        OpenMode(..),
                        closeFd,
@@ -64,6 +65,7 @@ d = debugM "download"
 i = infoM "download"
 w = warningM "download"
 
+
 cmd = simpleCmd "download" 
       "Downloads all pending podcast episodes (run update first)" helptext 
       [] cmd_worker
@@ -72,17 +74,34 @@ cmd_worker gi ([], casts) = lock $
     do podcastlist_raw <- getSelectedPodcasts (gdbh gi) casts
        let podcastlist = filter_disabled podcastlist_raw
        episodelist <- mapM (getEpisodes (gdbh gi)) podcastlist
-       let episodes = filter (\x -> epstatus x == Pending) . concat $ episodelist
+       let episodes = filter (\x -> epstatus x == Pending) . concat $ episodelist       
+       --consider map, filter to get castnames 
+       -- Extract castnames from already filtered list of episodes to download
+       -- Remove duplicates
+       -- Filter out '[' '"' ']' -- it looks bad, most likely is
+       -- replace commas with newline signs
+       let podcastsToFetch = (replace (",") ("\n") (filter (/='[')(filter (/=']')(filter (/='"') (show (nub((map(castname . podcast) episodes))))))))      
+       
+       -- This'll spread across the rest acting as if global
+       -- Bad decisions s02e02 2012?
+       notify <- getUseNotify
+       --putStrLn (notify)
 
        -- Now force the DB to be read so that we don't maintain a lock
        evaluate (length episodes)
        i $ printf "%d episode(s) to consider from %d podcast(s)"
-         (length episodes) (length podcastlist)
-       downloadEpisodes gi episodes
+         (length episodes) (length podcastlist)             
+       when (length episodes /= 0 && notify == "yes")$
+              --sendNotify ((show(length episodes)) ++ " New podcast(s)")  ("")
+              sendNotify ("New podcast(s) in:") (podcastsToFetch)       
+       downloadEpisodes gi episodes notify
        cleanupDirectory gi episodes
 
 cmd_worker _ _ =
     fail $ "Invalid arguments to download; please see hpodder download --help"
+
+--sendNotify :: String -> String -> IO()
+sendNotify title body = do oneShot title body "audio-input-microphone" ([] :: [GeneralHint])
 
 cleanupDirectory gi episodes =
     do base <- getEnclTmp
@@ -96,7 +115,7 @@ cleanupDirectory gi episodes =
                  (not (file `elem` [".", ".."]))) $
                 removeFile (base ++ "/" ++ file)
 
-downloadEpisodes gi episodes =
+downloadEpisodes gi episodes notification =
     do progressinterval <- getProgressInterval
 
        watchFiles <- newMVar []
@@ -105,9 +124,9 @@ downloadEpisodes gi episodes =
        easyDownloads "download" getEnclTmp True
                      (\pt -> mapM (ep2dlentry pt) episodes)
                      (procStart watchFiles)
-                     (callback watchFiles)
+                     (callback watchFiles)                     
 
-    where nameofep e = printf "%d.%d" (castid . podcast $ e) (epid e)
+    where nameofep e = printf "%d.%d" (castid . podcast $ e) (epid e)          
           ep2dlentry pt episode =
               do cpt <- newProgress (nameofep episode)
                         (eplength episode)
@@ -120,10 +139,13 @@ downloadEpisodes gi episodes =
               do writeMeterString stdout meter $
                   "Get: " ++ nameofep (usertok dlentry) ++ " "
                    ++ (take 60 . eptitle . usertok $ dlentry) ++ "\n"
+                 when (notification == "yes") $
+                  sendNotify (take 60 . eptitle . usertok $ dlentry) ("Downloading now")
                  modifyMVar_ watchFilesMV $ \wf ->
-                     return $ (dltok, dlprogress dlentry) : wf
+                     return $ (dltok, dlprogress dlentry) : wf          
 
-          callback watchFilesMV pt meter dlentry dltok status result =
+          
+          callback watchFilesMV pt meter dlentry dltok status result =              
               modifyMVar_ watchFilesMV $ \wf ->
                   do size <- checkDownloadSize dltok
                      setP (dlprogress dlentry) (case size of
@@ -131,7 +153,8 @@ downloadEpisodes gi episodes =
                                                   Just x -> toInteger x)
                      procEpisode gi meter dltok 
                                      (usertok dlentry) (dlname dlentry)
-                                     (result, status)
+                                     (result, status) notification
+                     --sendNotify $ (take 60 . eptitle . usertok $ dlentry)
                      return $ filter (\(x, _) -> x /= dltok) wf
 
 -- FIXME: this never terminates, but at present, that may not hurt anything
@@ -147,9 +170,9 @@ watchTheFiles progressinterval watchFilesMV =
                              Nothing -> 0
                              Just x -> toInteger x)
 
-procEpisode gi meter dltok ep name r =
+procEpisode gi meter dltok ep name r mNotify =
        case r of
-         (Success, _) -> procSuccess gi ep (tokpath dltok)
+         (Success, _) -> procSuccess gi ep (tokpath dltok) mNotify
          (Failure, Terminated sigINT) -> 
              do i "Ctrl-C hit; aborting!"
                 -- Do not consider Ctrl-C a trackable error
@@ -163,9 +186,13 @@ procEpisode gi meter dltok ep name r =
                  commit (gdbh gi)
                  writeMeterString stderr meter $ " *** " ++ name ++ 
                                       ": Error downloading\n"
+                 when (mNotify == "yes") $
+                   sendNotify ("hpodder") ("***" ++ name ++ ": Error downloading\n" )
                  when (epstatus newep == Error) $
                     writeMeterString stderr meter $ " *** " ++ name ++ 
                              ": Disabled due to errors.\n"
+                 when (mNotify == "yes") $ 
+                  sendNotify ("hpodder") ( "***" ++ name ++  ": Disabled due to errors.\n" )
 considerDisable gi ep = forceEither $
     do faildays <- get (gcp gi) cast "epfaildays"
        failattempts <- get (gcp gi) cast "epfailattempts"
@@ -192,7 +219,7 @@ updateAttempt curtime ep =
        }
 
 
-procSuccess gi ep tmpfp =
+procSuccess gi ep tmpfp mNotify =
     do cp <- getCP ep idstr fnpart
        let cfg = get cp idstr
        let newfn = (strip $ forceEither $ cfg "downloaddir") ++ "/" ++
@@ -219,7 +246,9 @@ procSuccess gi ep tmpfp =
              (eptype newep) `elem` postProcTypes)) $
             do let postProcCommand = forceEither $ get (gcp gi) idstr "postproccommand"
                d $ "   Running postprocess command " ++ postProcCommand
-               runSimpleCmd environ postProcCommand
+               runSimpleCmd environ postProcCommand                    
+               when (mNotify == "yes" )$
+                sendNotify ( castname . podcast $ ep) ((eptitle $ ep) ++ "\n Downloaded")
 
        cp <- getCP newep idstr fnpart
        let cfg = get cp (show . castid . podcast $ newep)
@@ -285,7 +314,7 @@ procSuccess gi ep tmpfp =
                          ("CASTTITLE", castname . podcast $ ep),
                          ("EPFILENAME", fn),
                          ("EPURL", epurl ep),
-                         ("FEEDURL", feedurl . podcast $ ep),
+                         ("FEEDURL", feedurl . podcast $ ep),                         
                          ("SAFECASTTITLE", sanitize_fn . castname . podcast $ ep),
                          ("SAFEEPTITLE", sanitize_fn . eptitle $ ep),
                          ("EPID", show . epid $ ep),
@@ -327,6 +356,7 @@ getCP ep idstr fnpart =
                  cp <- set cp idstr "safefilename" 
                        (sanitize_fn (unEscapeString fnpart))
                  cp <- set cp idstr "safeeptitle" (sanitize_fn . eptitle $ ep)
+                 cp <- set cp idstr "casttitle" (castname . podcast $ ep)
                  return cp
 
 movefile old new =
