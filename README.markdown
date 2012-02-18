@@ -1,5 +1,3 @@
-##License
-pandoc COPYRIGHT
 #About
 ####First time reading, doing and Haskell
 
@@ -16,5 +14,5 @@ under general section
 4. Profit.
 
 ##TODO
-*Maybe perpodcast option instead of general
-*code really needs some documentation
+* Maybe perpodcast option instead of general
+* Code really needs some documentation
